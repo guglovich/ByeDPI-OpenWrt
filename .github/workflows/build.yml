@@ -9,12 +9,14 @@ jobs:
     outputs:
       tag: ${{ steps.prepare.outputs.tag }}
     strategy:
+      fail-fast: false
       matrix:
         branch:
           - openwrt-19.07
           - openwrt-21.02
           - openwrt-22.03
           - openwrt-23.05
+          - openwrt-24.10
         arch:
           - aarch64_cortex-a53
           - aarch64_cortex-a72
@@ -51,9 +53,13 @@ jobs:
             arch: mips_4kec
           - branch: openwrt-21.02
             arch: arm_cortex-a7_vfpv4
-        # include:
-        #   - branch: SNAPSHOT
-        #     arch: x86_64
+          - branch: openwrt-24.10
+            arch: arm_mpcore
+        include:
+          - branch: openwrt-24.10
+            arch: aarch64_cortex-a76
+          # - branch: SNAPSHOT
+          #   arch: x86_64
     container:
       image: openwrt/sdk:${{ matrix.arch }}-${{ matrix.branch }}
       options: --user root
@@ -63,7 +69,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup SDK
-        if: matrix.branch == 'openwrt-23.05' || matrix.branch == 'SNAPSHOT'
+        if: matrix.branch == 'openwrt-23.05' || matrix.branch == 'openwrt-24.10' || matrix.branch == 'SNAPSHOT'
         working-directory: /builder
         run: HOME=/builder ./setup.sh
 
@@ -160,6 +166,7 @@ jobs:
           - '21.02'
           - '22.03'
           - '23.05'
+          - '24.10'
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
