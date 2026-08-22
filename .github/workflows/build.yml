@@ -61,7 +61,7 @@ jobs:
         run: |
           mkdir public
           find . -name 'pkg-*.tar' -exec tar -C ./public -xvf {} \;
-          rm -f public/Packages* public/manifest public/public.key
+          find ./public -type f ! \( -name '*.apk' -o -name '*.ipk' \) -delete
           ls -la public/
 
       - name: Delete old release
