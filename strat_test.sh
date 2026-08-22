@@ -28,6 +28,8 @@ fake_ttl8|--fake -1 --ttl 8
 oob_3sni|--oob 3+s
 tlsrec_3sni|--tlsrec 3+s
 multi_split|--split 1 --split 3+s --split 10+s --disorder 20+s
+combo_ladder_auto|-d1 -s1+s -d3+s -s6+s -d9+s -s12+s -d15+s -s20+s -d25+s -s30+s -a1 --auto=torst --timeout 3 --auto-mode 3 --fake -1 --ttl 8
+combo_fake_auto|--fake -1 --ttl 8 --auto=torst --timeout 3 --auto-mode 3 --split 1 --disorder 3+s
 "
 
 label() {
