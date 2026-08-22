@@ -1,18 +1,18 @@
 #!/bin/sh
-# ByeDPI strategy tester: probes candidate ciadpi strategies against a target URL.
+# ByeDPI strategy tester v2: probes candidate ciadpi strategies against several URLs.
 #
 # Usage:
-#   sh strat_test.sh [url]
-# Default url: https://www.youtube.com/generate_204
+#   sh strat_test.sh [url1 url2 ...]
+# Defaults: youtube generate_204 + instagram.
 #
 # Each strategy runs its own temporary ciadpi instance on ports 10810+,
 # your current service (if any) is not touched.
 
 set -u
 
-URL="${1:-https://www.youtube.com/generate_204}"
 CIADPI=/usr/bin/ciadpi
 BASE_PORT=10810
+URLS="${*:-https://www.youtube.com/generate_204 https://www.instagram.com}"
 
 if [ "$(id -u)" != "0" ]; then echo "err: run as root"; exit 1; fi
 [ -x "$CIADPI" ] || { echo "err: $CIADPI not found (is byedpi installed?)"; exit 1; }
@@ -30,45 +30,87 @@ tlsrec_3sni|--tlsrec 3+s
 multi_split|--split 1 --split 3+s --split 10+s --disorder 20+s
 "
 
-printf '%-24s %-6s %s\n' "STRATEGY" "CODE" "VERDICT"
-printf '%s\n' "--------------------------------------------------------------"
+label() {
+	printf '%s' "$1" |
+		sed -e 's|^https\?://||' -e 's|^www\.||' -e 's|[/.].*||'
+}
 
-printf '%-24s ' "(direct, no proxy)"
-DIRECT="$(curl -sS -o /dev/null -w '%{http_code}' -m 8 "$URL" 2>/dev/null)"
-RC=$?
-[ "$RC" -ne 0 ] && DIRECT="$DIRECT/E$RC"
-case "$DIRECT" in
-	2*|3*) echo "$DIRECT OK" ;;
-	*)     echo "$DIRECT FAIL(curl rc=${DIRECT##*/E})" ;;
-esac
+# --- FakeIP guard -----------------------------------------------------------
+FIRST_HOST="$(printf '%s\n' $URLS | head -n1)"
+if nslookup "$(label "$FIRST_HOST").com" 127.0.0.1 2>/dev/null | grep -q '198\.18\.'; then
+	echo '!! ВНИМАНИЕ: системный DNS отдаёт FakeIP (198.18.x.x).'
+	echo '   При работающем forkop/podkop результаты будут ложными.'
+	echo '   Остановите сервис маршрутизации на время теста:'
+	echo '     /etc/init.d/forkop stop   # или podkop'
+	echo
+fi
 
+probe() {
+	# probe <port> <url> -> "code" or "code/E<curl_rc>"
+	local port="$1" url="$2" out rc
+	out="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
+		--socks5-hostname "127.0.0.1:$port" "$url" 2>/dev/null)"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		out="$out/E$rc"
+	fi
+	printf '%s' "$out"
+}
+
+cell() {
+	# cell <raw> -> formatted verdict string
+	case "$1" in
+		2*|3*)  printf '%-13s' "OK($1)" ;;
+		*/E35)  printf '%-13s' "reset" ;;
+		*/E7)   printf '%-13s' "noconn" ;;
+		*/E28)  printf '%-13s' "timeout" ;;
+		*)      printf '%-13s' "$1" ;;
+	esac
+}
+
+# --- header -----------------------------------------------------------------
+HDR="$(printf '%-24s' STRATEGY)"
+for u in $URLS; do HDR="$HDR $(printf '%-13s' "$(label "$u")")"; done
+printf '%s\n' "$HDR"
+printf '%s\n' "----------------------------------------------------------------------------"
+
+# --- direct baseline --------------------------------------------------------
+LINE="$(printf '%-24s' '(direct)')"
+for u in $URLS; do
+	R="$(curl -sS -o /dev/null -w '%{http_code}' -m 8 "$u" 2>/dev/null)"
+	rc=$?
+	[ "$rc" -ne 0 ] && R="$R/E$rc"
+	LINE="$LINE $(cell "$R")"
+done
+printf '%s\n' "$LINE"
+
+# --- strategies -------------------------------------------------------------
 PORT=$BASE_PORT
 echo "$STRATEGIES" | while IFS='|' read -r name opts; do
 	[ -n "$name" ] || continue
+
 	"$CIADPI" -i 127.0.0.1 -p "$PORT" $opts >/dev/null 2>&1 &
 	PID=$!
 	sleep 1
 
-	CODE="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
-		--socks5-hostname "127.0.0.1:$PORT" "$URL" 2>/dev/null)"
-	RC=$?
-	[ "$RC" -ne 0 ] && CODE="$CODE/E$RC"
-
-	case "$CODE" in
-		2*|3*) verdict="OK -> use: option cmd_opts '$opts'" ;;
-		*/E35) verdict="FAIL (TLS reset by DPI)" ;;
-		*/E7)  verdict="FAIL (ciadpi dead?)" ;;
-		*/E28) verdict="FAIL (timeout)" ;;
-		*)     verdict="HTTP $CODE" ;;
-	esac
-	printf '%-24s %-6s %s\n' "$name" "$CODE" "$verdict"
+	LINE="$(printf '%-24s' "$name")"
+	for u in $URLS; do
+		LINE="$LINE $(cell "$(probe "$PORT" "$u")")"
+	done
+	printf '%s\n' "$LINE"
 
 	kill "$PID" >/dev/null 2>&1
 	wait "$PID" 2>/dev/null
 	PORT=$((PORT + 1))
 done
 
-printf '%s\n' "--------------------------------------------------------------"
-echo "Apply winner:"
-echo "  uci set byedpi.main.cmd_opts='<opts>'"
-echo "  uci commit byedpi && /etc/init.d/byedpi restart"
+printf '%s\n' "----------------------------------------------------------------------------"
+cat <<EOF
+OK(nnn)  - работает, код ответа nnn
+reset    - TLS сброшен DPI (curl rc=35)
+noconn   - ciadpi не поднялся (rc=7)
+timeout  - таймаут (rc=28)
+Apply winner:
+  uci set byedpi.main.cmd_opts='<opts of winning row>'
+  uci commit byedpi && /etc/init.d/byedpi restart
+EOF
