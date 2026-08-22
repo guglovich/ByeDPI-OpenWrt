@@ -49,9 +49,13 @@ ARCH="$(awk -F\' '/DISTRIB_ARCH/ {print $2}' /etc/openwrt_release)"
 msg "OpenWrt arch: $ARCH, package manager: $PKG"
 if [ "$ARCH" != "riscv64_generic" ]; then
 	warn "package is built for riscv64_generic, current device reports '$ARCH'"
-	printf "%s" "continue anyway? [y/N]: "
-	read -r ans
-	case "$ans" in y|Y|д|Д) ;; *) exit 0 ;; esac
+	if [ -t 0 ]; then
+		printf "%s" "continue anyway? [y/N]: "
+		read -r ans
+		case "$ans" in y|Y|д|Д) ;; *) exit 0 ;; esac
+	else
+		die "refusing to continue on wrong arch; download the script and run it locally to override"
+	fi
 fi
 
 # --------------------------------------------------------------- fetch & pkg
