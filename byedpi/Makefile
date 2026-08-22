@@ -1,10 +1,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=byedpi
-PKG_VERSION:=@VERSION@
+PKG_VERSION:=ba532298de7b28cfe854aea83d061369d13ca290
 PKG_RELEASE:=1
 
-PKG_SOURCE:=v$(PKG_VERSION).tar.gz
+PKG_SOURCE:=$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/hufrea/byedpi/archive/
 PKG_HASH:=skip
 
