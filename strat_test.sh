@@ -34,8 +34,13 @@ printf '%-24s %-6s %s\n' "STRATEGY" "CODE" "VERDICT"
 printf '%s\n' "--------------------------------------------------------------"
 
 printf '%-24s ' "(direct, no proxy)"
-DIRECT="$(curl -sS -o /dev/null -w '%{http_code}' -m 8 "$URL" 2>/dev/null || printf '%s' "$?")"
-case "$DIRECT" in 000) echo "$DIRECT FAIL/reset" ;; 2*|3*) echo "$DIRECT OK" ;; *) echo "$DIRECT ?" ;; esac
+DIRECT="$(curl -sS -o /dev/null -w '%{http_code}' -m 8 "$URL" 2>/dev/null)"
+RC=$?
+[ "$RC" -ne 0 ] && DIRECT="$DIRECT/E$RC"
+case "$DIRECT" in
+	2*|3*) echo "$DIRECT OK" ;;
+	*)     echo "$DIRECT FAIL(curl rc=${DIRECT##*/E})" ;;
+esac
 
 PORT=$BASE_PORT
 echo "$STRATEGIES" | while IFS='|' read -r name opts; do
@@ -45,11 +50,15 @@ echo "$STRATEGIES" | while IFS='|' read -r name opts; do
 	sleep 1
 
 	CODE="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
-		--socks5-hostname "127.0.0.1:$PORT" "$URL" 2>/dev/null || printf '%s' "$?")"
+		--socks5-hostname "127.0.0.1:$PORT" "$URL" 2>/dev/null)"
+	RC=$?
+	[ "$RC" -ne 0 ] && CODE="$CODE/E$RC"
 
 	case "$CODE" in
 		2*|3*) verdict="OK -> use: option cmd_opts '$opts'" ;;
-		000)   verdict="FAIL (reset/timeout)" ;;
+		*/E35) verdict="FAIL (TLS reset by DPI)" ;;
+		*/E7)  verdict="FAIL (ciadpi dead?)" ;;
+		*/E28) verdict="FAIL (timeout)" ;;
 		*)     verdict="HTTP $CODE" ;;
 	esac
 	printf '%-24s %-6s %s\n' "$name" "$CODE" "$verdict"
