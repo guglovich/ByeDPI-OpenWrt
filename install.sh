@@ -138,6 +138,10 @@ if [ -n "$CFG" ]; then
 	uci set "$CFG.$PROFILE.proxy_config_type=outbound"
 	uci set "$CFG.$PROFILE.outbound_json=$OUT"
 	uci set "$CFG.$PROFILE.enable_udp_over_tcp=0"
+	# resolve domain into real IP before sending to local socks,
+	# otherwise sing-box hands over its own FakeIP (198.18.0.0/15) and
+	# ciadpi loops back into sing-box -> PR_CONNECT_RESET_ERROR
+	uci set "$CFG.$PROFILE.resolve_real_ip_for_routing=1"
 	uci commit "$CFG"
 
 	/etc/init.d/byedpi restart >/dev/null 2>&1 || true
