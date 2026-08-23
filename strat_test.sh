@@ -143,7 +143,7 @@ run_phase() {
 	echo "$STRATEGIES" | while IFS='|' read -r name opts; do
 		[ -n "$name" ] || continue
 		ERRLOG="$WORK/ciadpi.err"
-		"$CIADPI" -i 127.0.0.1 -p "$PORT" $opts >/dev/null 2>"$ERRLOG" &
+		"$CIADPI" -p "$PORT" $opts >/dev/null 2>"$ERRLOG" &
 		pid=$!
 		echo "$pid" >>"$WORK/pids"
 		sleep 1
