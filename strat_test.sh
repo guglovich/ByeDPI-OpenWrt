@@ -16,7 +16,6 @@
 set -u
 
 CIADPI=/usr/bin/ciadpi
-PORT=10810
 TIMEOUT_S="${TIMEOUT_S:-8}"
 
 DEFAULT_URLS="
@@ -29,7 +28,7 @@ https://discord.com
 https://x.com
 https://rutracker.org
 https://github.com
-https://ya.ru
+https://nnmclub.to
 "
 
 KEY_URLS="https://www.youtube.com/generate_204 https://www.instagram.com https://discord.com https://x.com"
@@ -87,6 +86,14 @@ if nslookup "$(label "$FIRST_HOST").com" 127.0.0.1 2>/dev/null | grep -q '198\.1
 	echo
 fi
 
+# --- pick a free port ---------------------------------------------------------
+PORT=""
+for p in $(seq 10810 10830); do
+	netstat -tln 2>/dev/null | grep -q ":$p " || { PORT=$p; break; }
+done
+[ -n "$PORT" ] || { echo "err: нет свободного порта в диапазоне 10810-10830"; exit 1; }
+echo ">>> Тестовый порт: $PORT"
+
 # --- process/result management -----------------------------------------------
 WORK=/tmp/byedpi_strat.$$
 mkdir -p "$WORK"
@@ -118,13 +125,14 @@ run_phase() {
 	local suffix="$1"; shift
 	echo "$STRATEGIES" | while IFS='|' read -r name opts; do
 		[ -n "$name" ] || continue
-		"$CIADPI" -i 127.0.0.1 -p "$PORT" $opts >/dev/null 2>&1 &
+		ERRLOG="$WORK/ciadpi.err"
+		"$CIADPI" -i 127.0.0.1 -p "$PORT" $opts >/dev/null 2>"$ERRLOG" &
 		pid=$!
 		echo "$pid" >>"$WORK/pids"
 		sleep 1
 
 		if ! kill -0 "$pid" 2>/dev/null; then
-			printf '%-20s FAILED-TO-START\n' "$name"
+			printf '%-20s FAILED-TO-START: %s\n' "$name" "$(head -1 "$ERRLOG")"
 			continue
 		fi
 
