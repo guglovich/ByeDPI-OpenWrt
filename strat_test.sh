@@ -1,12 +1,13 @@
 #!/bin/sh
-# ByeDPI strategy tester v3 (Zapret-style).
+# ByeDPI strategy tester v3.1 (Zapret-style).
 #
 # Wide technique grid x site matrix, two-phase screening:
 #   phase 1 - fast screen on key sites (youtube/instagram/discord/x)
 #   phase 2 - full matrix only for strategies that passed the screen
+# Final verdict is given PER SERVICE: ByeDPI (with best strategy) or AWG.
 #
 # Usage:
-#   sh strat_test.sh                 # default site set (~10 services)
+#   sh strat_test.sh                 # default site set
 #   sh strat_test.sh URL...          # custom site set (all become key sites)
 #   TIMEOUT_S=6 sh strat_test.sh     # per-request timeout, default 8s
 #
@@ -27,7 +28,6 @@ https://www.facebook.com
 https://discord.com
 https://x.com
 https://rutracker.org
-https://github.com
 https://nnmclub.to
 "
 
@@ -86,7 +86,6 @@ if nslookup "$(label "$FIRST_HOST").com" 127.0.0.1 2>/dev/null | grep -q '198\.1
 	echo
 fi
 
-# --- pick a free port ---------------------------------------------------------
 PORT=""
 for p in $(seq 10810 10830); do
 	netstat -tln 2>/dev/null | grep -q ":$p " || { PORT=$p; break; }
@@ -94,7 +93,6 @@ done
 [ -n "$PORT" ] || { echo "err: нет свободного порта в диапазоне 10810-10830"; exit 1; }
 echo ">>> Тестовый порт: $PORT"
 
-# --- process/result management -----------------------------------------------
 WORK=/tmp/byedpi_strat.$$
 mkdir -p "$WORK"
 cleanup() {
@@ -106,7 +104,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 probe() {
-	# probe <url> -> cell verdict; any HTTP status counts as success
 	local out rc
 	out="$(curl -sS -o /dev/null -w '%{http_code}' -m "$TIMEOUT_S" \
 		--socks5-hostname "127.0.0.1:$PORT" "$1" 2>/dev/null)"
@@ -120,9 +117,29 @@ probe() {
 	esac
 }
 
+is_ok() {
+	case "$1" in
+		reset|noconn|timeout|err*) return 1 ;;
+		*) [ -n "$1" ] && return 0 || return 1 ;;
+	esac
+}
+
+fmt_cell() {
+	case "$1" in
+		reset)   printf 'reset' ;;
+		noconn)  printf 'noconn' ;;
+		timeout) printf 'timeout' ;;
+		err*)    printf '%s' "$1" ;;
+		*)       printf 'OK(%s)' "$1" ;;
+	esac
+}
+
 run_phase() {
-	# run_phase <phase-file-suffix> <urls...>
+	# run_phase <suffix> <urls...>: probes every strategy against urls,
+	# saves per-strategy "ok n token token ..." into $WORK/<name><suffix>
+	# and the url order into $WORK/urls<suffix>
 	local suffix="$1"; shift
+	printf '%s\n' "$@" >"$WORK/urls$suffix"
 	echo "$STRATEGIES" | while IFS='|' read -r name opts; do
 		[ -n "$name" ] || continue
 		ERRLOG="$WORK/ciadpi.err"
@@ -136,37 +153,69 @@ run_phase() {
 			continue
 		fi
 
-		codes=""
+		tokens=""
 		ok=0
 		n=0
 		for u in "$@"; do
 			cell="$(probe "$u")"
 			n=$((n + 1))
-			case "$cell" in reset|noconn|timeout|err*) ;; *) ok=$((ok + 1)) ;; esac
-			codes="$codes $(printf '%-11s' "$cell")"
+			is_ok "$cell" && ok=$((ok + 1))
+			tokens="$tokens$cell "
 		done
-		printf '%-20s %s\n' "$name" "$codes"
-		printf '%s %s %s\n' "$ok" "$n" "$codes" >"$WORK/$name$suffix"
+		printf '%-20s ' "$name"
+		for t in $tokens; do printf '%-12s' "$(fmt_cell "$t")"; done
+		printf '\n'
+		printf '%s %s %s\n' "$ok" "$n" "$tokens" >"$WORK/$name$suffix"
 		kill "$pid" 2>/dev/null
 	done
 }
 
-row_of() {
-	# row_of <strategy-name>: rebuild display row from saved phases
-	local name="$1" f="$WORK/$name" ok=0 n=0 codes="" o c
-	for sfx in .p1 .p2; do
-		[ -f "${f}${sfx}" ] || continue
-		read -r o c _rest <"${f}${sfx}"
-		ok=$((ok + o))
-		n=$((n + c))
-		codes="$codes$(sed 's/^[0-9]* [0-9]* //' "${f}${sfx}")"
+col_token() {
+	# col_token <strategy> <url> -> raw token for that url across phases
+	local name="$1" url="$2" ph f idx tok rest
+	for ph in p1 p2; do
+		f="$WORK/urls$ph"
+		[ -f "$f" ] || continue
+		idx=0
+		found=""
+		for u in $(cat "$f"); do
+			idx=$((idx + 1))
+			[ "$u" = "$url" ] && { found=$idx; break; }
+		done
+		[ -n "$found" ] || continue
+		sf="$WORK/$name.$ph"
+		[ -f "$sf" ] || return
+		read -r _ _ rest <"$sf"
+		set -- $rest
+		eval "shift \$((found - 1))"
+		printf '%s' "$1"
+		return
 	done
-	printf '%-20s %-8s %s\n' "$name" "$ok/$n" "$codes"
+}
+
+row_of() {
+	local name="$1" u t line
+	line="$(printf '%-20s' "$name")"
+	for u in $URLS; do
+		t="$(col_token "$name" "$u")"
+		[ -z "$t" ] && t="-"
+		line="$line $(printf '%-12s' "$(fmt_cell "$t")")"
+	done
+	printf '%-20s %-7s %s\n' "$name" "$(ok_count "$name")/$(printf '%s' "$URLS" | wc -w)" "${line#* }"
+}
+
+ok_count() {
+	local name="$1" total=0 u t
+	for u in $URLS; do
+		t="$(col_token "$name" "$u")"
+		is_ok "$t" && total=$((total + 1))
+	done
+	printf '%s' "$total"
 }
 
 # --- header ------------------------------------------------------------------
 HDR="$(printf '%-20s' STRATEGY)"
-for u in $URLS; do HDR="$HDR $(printf '%-11s' "$(label "$u")")"; done
+for u in $URLS; do HDR="$HDR $(printf '%-12s' "$(label "$u")")"; done
 echo "$HDR"
 echo "--------------------------------------------------------------------------------"
 
@@ -176,7 +225,7 @@ for u in $URLS; do
 	if [ "$rc" -ne 0 ]; then
 		case $rc in 35) R=reset;; 7) R=noconn;; 28) R=timeout;; *) R="err$rc";; esac
 	fi
-	LINE="$LINE $(printf '%-11s' "$R")"
+	LINE="$LINE $(printf '%-12s' "$R")"
 done
 echo "$LINE"
 
@@ -185,6 +234,7 @@ kn=$(printf '%s' "$KEY" | wc -w)
 echo ">>> Фаза 1: скрининг по ключевым сайтам ($kn шт)"
 run_phase ".p1" $KEY
 
+# --- phase 2: strategies that passed ALL keys --------------------------------
 SURVIVORS=""
 for f in "$WORK"/*.p1; do
 	[ -f "$f" ] || continue
@@ -192,46 +242,65 @@ for f in "$WORK"/*.p1; do
 	read -r o c _ <"$f"
 	[ "$o" -eq "$kn" ] && SURVIVORS="$SURVIVORS $name"
 done
-[ -z "$(printf '%s' "$SURVIVORS" | tr -d ' ')" ] && {
-	echo
-	echo 'Ни одна стратегия не прошла ключевые сайты.'
-	echo 'Проверьте: сервис маршрутизации остановлен? TSPU изменил поведение?'
-	exit 0
-}
 
-# --- phase 2 -----------------------------------------------------------------
 REST=""
 for u in $URLS; do
 	case " $KEY " in *" $u "*) ;; *) REST="$REST $u" ;; esac
 done
-if [ -n "$REST" ]; then
-	echo ">>> Фаза 2: полная матрица для прошедших экран ($(printf '%s' "$SURVIVORS" | wc -w) стратегий)"
+if [ -n "$(printf '%s' "$SURVIVORS" | tr -d ' ')" ] && [ -n "$REST" ]; then
+	echo ">>> Фаза 2: полная матрица для прошедших все ключи ($(printf '%s' "$SURVIVORS" | wc -w) стратегий)"
 	run_phase ".p2" $REST
+else
+	echo ">>> Фаза 2 пропущена: ни одна стратегия не прошла все ключи (см. вердикты ниже)"
 fi
 
-# --- summary -----------------------------------------------------------------
+# --- per-service verdicts ----------------------------------------------------
 echo "--------------------------------------------------------------------------------"
-echo "=== Итоговая матрица (сортировка по покрытию) ==="
+echo "=== Вердикты по сервисам ==="
+for u in $URLS; do
+	L="$(label "$u")"
+	PASSERS=""
+	for f in "$WORK"/*.p1; do
+		name=$(basename "$f"); name=${name%.p1}
+		t="$(col_token "$name" "$u")"
+		is_ok "$t" && PASSERS="$PASSERS $name"
+	done
+	cnt=$(printf '%s' "$PASSERS" | wc -w)
+	if [ "$cnt" -gt 0 ]; then
+		TOP=$(printf '%s' "$PASSERS" | tr ' ' '\n' | head -4 | tr '\n' ',')
+		printf '%-14s ByeDPI (%d/%d стратегий, напр.: %s)\n' "$L" "$cnt" \
+			$(echo "$STRATEGIES" | grep -c '^') "${TOP%,}"
+	else
+		printf '%-14s -> AWG (ни одна стратегия не пробила; вероятно IP-блок краёв)\n' "$L"
+	fi
+done
+
+# --- global recommendation ---------------------------------------------------
+BEST=""
+BESTOK=-1
 for f in "$WORK"/*.p1; do
 	name=$(basename "$f"); name=${name%.p1}
-	row_of "$name"
-done | sort -t'|' -k2 -rn | awk -F'|' '{print}'
+	c="$(ok_count "$name")"
+	[ "$c" -gt "$BESTOK" ] && { BESTOK=$c; BEST=$name; }
+done
 
-BEST=$(for f in "$WORK"/*.p1; do
-	name=$(basename "$f"); name=${name%.p1}
-	row_of "$name"
-done | sort -t'|' -k2 -rn | head -1 | awk '{print $1}')
-
-BOPT=$(echo "$STRATEGIES" | grep "^$BEST|" | cut -d'|' -f2-)
 cat <<EOF
-
-Рекомендация (максимальное покрытие): $BEST
-  $BOPT
+--------------------------------------------------------------------------------
+Лучшая по общему покрытию ($BESTOK из $(printf '%s' "$URLS" | wc -w)): $BEST
+EOF
+if [ -n "$BEST" ]; then
+	grep "^$BEST|" <<EOFSTRAT >/dev/null 2>&1
+$STRATEGIES
+EOFSTRAT
+	BOPT=$(echo "$STRATEGIES" | grep "^$BEST|" | cut -d'|' -f2-)
+	echo "  $BOPT"
+	cat <<EOF
 
 Применить:
   - Forkop: вставить строку в поле стратегии ByeDPI-секции, рестарт Forkop
   - или: uci set byedpi.main.cmd_opts='$BOPT'; uci commit byedpi; /etc/init.d/byedpi restart
 
-Любой HTTP-код (даже 403/404) = TLS прошёл через ТСПУ, десинк работает.
-reset = TLS сброшен; timeout = молчаливый дроп; noconn = инстанс не поднялся.
+Сервисы с вердиктом "-> AWG" добавьте в списки AWG-секции.
+Любой HTTP-код (включая 403/404) = TLS прошёл ТСПУ. reset = RST, timeout = тихий дроп.
 EOF
+fi
